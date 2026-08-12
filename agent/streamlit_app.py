@@ -239,7 +239,7 @@ PIPELINE_HTML_TEMPLATE = """
     position: relative;
     width: 100%;
     height: 500px;
-    border-radius: 14px;
+    border-radius: 100px;
     overflow: hidden;
     background: radial-gradient(ellipse at center, #0f172a 0%, #020617 75%);
     border: 1px solid #1e293b;

@@ -447,7 +447,7 @@ PIPELINE_HTML_TEMPLATE = """
 
 def render_pipeline_visual(status: dict):
     html = PIPELINE_HTML_TEMPLATE.replace("__STATUS_JSON__", json.dumps(status))
-    components.html(html, height=460, scrolling=False)
+    components.html(html, height=600, scrolling=False)
 
 
 COPY_BUTTON_TEMPLATE = """

@@ -246,12 +246,12 @@ PIPELINE_HTML_TEMPLATE = """
     box-sizing: border-box;
   }
   #canvas-holder {
-    width: 600px;
-    height: 600px;
+    width: 100%;
+    height: 100%;
   }
   .node-label {
-    color:#475569; font-size:12px; letter-spacing:1px; font-weight:600;
-    width:23%; text-align:center; transition:all .4s ease;
+    color:#475569; font-size:12px; letter-spacing:1px; font-weight:600px;
+    width:100%; text-align:center; transition:all .4s ease;
   }
   .node-label.active { color:#fbbf24; text-shadow:0 0 12px rgba(251,191,36,0.8); }
   .node-label.done   { color:#4ade80; text-shadow:0 0 10px rgba(74,222,128,0.7); }

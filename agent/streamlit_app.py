@@ -226,22 +226,29 @@ st.markdown(
 # particles along completed links, framed with HUD corner brackets)
 # --------------------------------------------------------------------------
 PIPELINE_HTML_TEMPLATE = """
-<div id="viz-wrap" style="position:relative;width:100%;height:440px;border-radius:14px;overflow:hidden;
-     background:radial-gradient(ellipse at center, #0f172a 0%, #020617 75%);border:1px solid #1e293b;">
-  <div id="canvas-holder" style="width:100%;height:100%;"></div>
-  <div class="hud-corner hud-tl"></div>
-  <div class="hud-corner hud-tr"></div>
-  <div class="hud-corner hud-bl"></div>
-  <div class="hud-corner hud-br"></div>
-  <div id="labels" style="position:absolute;bottom:16px;left:0;right:0;display:flex;justify-content:space-around;
-       pointer-events:none;font-family:'JetBrains Mono',monospace;">
-    <div class="node-label" data-idx="0">01 · SEARCH</div>
-    <div class="node-label" data-idx="1">02 · READ</div>
-    <div class="node-label" data-idx="2">03 · WRITE</div>
-    <div class="node-label" data-idx="3">04 · CRITIQUE</div>
-  </div>
-</div>
 <style>
+  html, body {
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    overflow: hidden !important;
+    background: transparent !important;
+  }
+  #viz-wrap {
+    position: relative;
+    width: 100% !important;
+    height: 440px;
+    border-radius: 14px;
+    overflow: hidden;
+    background: radial-gradient(ellipse at center, #0f172a 0%, #020617 75%);
+    border: 1px solid #1e293b;
+    box-sizing: border-box;
+  }
+  #canvas-holder {
+    width: 100% !important;
+    height: 100% !important;
+  }
   .node-label {
     color:#475569; font-size:12px; letter-spacing:1px; font-weight:600;
     width:23%; text-align:center; transition:all .4s ease;
@@ -256,6 +263,21 @@ PIPELINE_HTML_TEMPLATE = """
   .hud-bl { bottom:10px; left:10px; border-bottom:2px solid; border-left:2px solid; }
   .hud-br { bottom:10px; right:10px; border-bottom:2px solid; border-right:2px solid; }
 </style>
+
+<div id="viz-wrap">
+  <div id="canvas-holder"></div>
+  <div class="hud-corner hud-tl"></div>
+  <div class="hud-corner hud-tr"></div>
+  <div class="hud-corner hud-bl"></div>
+  <div class="hud-corner hud-br"></div>
+  <div id="labels" style="position:absolute;bottom:16px;left:0;right:0;display:flex;justify-content:space-around;
+       pointer-events:none;font-family:'JetBrains Mono',monospace;">
+    <div class="node-label" data-idx="0">01 · SEARCH</div>
+    <div class="node-label" data-idx="1">02 · READ</div>
+    <div class="node-label" data-idx="2">03 · WRITE</div>
+    <div class="node-label" data-idx="3">04 · CRITIQUE</div>
+  </div>
+</div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
 (function () {
@@ -447,7 +469,8 @@ PIPELINE_HTML_TEMPLATE = """
 
 def render_pipeline_visual(status: dict):
     html = PIPELINE_HTML_TEMPLATE.replace("__STATUS_JSON__", json.dumps(status))
-    components.html(html, height=600, scrolling=False)
+    components.html(html, height=460
+                    , scrolling=False)
 
 
 COPY_BUTTON_TEMPLATE = """

@@ -237,9 +237,9 @@ PIPELINE_HTML_TEMPLATE = """
   }
   #viz-wrap {
     position: relative;
-    width: 100%;
+    width: 900px;
     height: 500px;
-    border-radius: 100px;
+    border-radius: 14px;
     overflow: hidden;
     background: radial-gradient(ellipse at center, #0f172a 0%, #020617 75%);
     border: 1px solid #1e293b;

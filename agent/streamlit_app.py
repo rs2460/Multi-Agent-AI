@@ -237,7 +237,7 @@ PIPELINE_HTML_TEMPLATE = """
   }
   #viz-wrap {
     position: relative;
-    width: 800;
+    width: 1000px;
     height: 400px;
     border-radius: 14px;
     overflow: hidden;

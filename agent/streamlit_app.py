@@ -228,17 +228,17 @@ st.markdown(
 PIPELINE_HTML_TEMPLATE = """
 <style>
   html, body {
-    margin: 0 !important;
-    padding: 0 !important;
-    width: 100% !important;
-    height: 100% !important;
-    overflow: hidden !important;
-    background: transparent !important;
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: transparent;
   }
   #viz-wrap {
     position: relative;
-    width: 100% !important;
-    height: 440px;
+    width: 100%;
+    height: 600px;
     border-radius: 14px;
     overflow: hidden;
     background: radial-gradient(ellipse at center, #0f172a 0%, #020617 75%);
@@ -246,8 +246,8 @@ PIPELINE_HTML_TEMPLATE = """
     box-sizing: border-box;
   }
   #canvas-holder {
-    width: 100% !important;
-    height: 100% !important;
+    width: 100%;
+    height: 100%;
   }
   .node-label {
     color:#475569; font-size:12px; letter-spacing:1px; font-weight:600;
@@ -469,8 +469,7 @@ PIPELINE_HTML_TEMPLATE = """
 
 def render_pipeline_visual(status: dict):
     html = PIPELINE_HTML_TEMPLATE.replace("__STATUS_JSON__", json.dumps(status))
-    components.html(html, height=460
-                    , scrolling=False)
+    components.html(html, height=620, scrolling=False)
 
 
 COPY_BUTTON_TEMPLATE = """

@@ -416,12 +416,30 @@ PIPELINE_HTML_TEMPLATE = """
     if (s !== 'pending') el.classList.add(s);
   });
 
-  window.addEventListener('resize', function () {
+  function syncSize() {
     var w2 = holder.clientWidth, h2 = holder.clientHeight;
+    if (w2 === 0 || h2 === 0) return;
     camera.aspect = w2 / h2;
     camera.updateProjectionMatrix();
     renderer.setSize(w2, h2);
-  });
+  }
+
+  window.addEventListener('resize', syncSize);
+
+  // Streamlit Cloud sizes the component's iframe asynchronously (after this
+  // script has already run), so the very first clientWidth read above can
+  // be captured before the iframe reaches its final, real width — locking
+  // the canvas at a too-small size that a plain window "resize" event never
+  // corrects. ResizeObserver watches the holder itself and re-syncs whenever
+  // its actual box size changes, catching that race (and any later ones,
+  // e.g. sidebar collapse/expand).
+  if (window.ResizeObserver) {
+    var ro = new ResizeObserver(function () { syncSize(); });
+    ro.observe(holder);
+  } else {
+    // Fallback for older browsers without ResizeObserver support.
+    setTimeout(syncSize, 300);
+  }
 })();
 </script>
 """

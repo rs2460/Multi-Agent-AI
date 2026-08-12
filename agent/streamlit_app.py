@@ -226,46 +226,9 @@ st.markdown(
 # particles along completed links, framed with HUD corner brackets)
 # --------------------------------------------------------------------------
 PIPELINE_HTML_TEMPLATE = """
-<style>
-  html, body {
-    margin: 0;
-    padding: 0;
-    width: 900px;
-    height: 500px;
-    overflow: hidden;
-    background: transparent;
-  }
-  #viz-wrap {
-    position: relative;
-    width: 900px;
-    height: 500px;
-    border-radius: 14px;
-    overflow: hidden;
-    background: radial-gradient(ellipse at center, #0f172a 0%, #020617 75%);
-    border: 1px solid #1e293b;
-    box-sizing: border-box;
-  }
-  #canvas-holder {
-    width: 100%;
-    height: 100%;
-  }
-  .node-label {
-    color:#475569; font-size:12px; letter-spacing:1px; font-weight:600px;
-    width:100%; text-align:center; transition:all .4s ease;
-  }
-  .node-label.active { color:#fbbf24; text-shadow:0 0 12px rgba(251,191,36,0.8); }
-  .node-label.done   { color:#4ade80; text-shadow:0 0 10px rgba(74,222,128,0.7); }
-  .node-label.error  { color:#f87171; text-shadow:0 0 10px rgba(248,113,113,0.7); }
-
-  .hud-corner { position:absolute; width:16px; height:16px; border-color:#38bdf8; opacity:0.55; }
-  .hud-tl { top:10px; left:10px; border-top:2px solid; border-left:2px solid; }
-  .hud-tr { top:10px; right:10px; border-top:2px solid; border-right:2px solid; }
-  .hud-bl { bottom:10px; left:10px; border-bottom:2px solid; border-left:2px solid; }
-  .hud-br { bottom:10px; right:10px; border-bottom:2px solid; border-right:2px solid; }
-</style>
-
-<div id="viz-wrap">
-  <div id="canvas-holder"></div>
+<div id="viz-wrap" style="position:relative;width:100%;height:440px;border-radius:14px;overflow:hidden;
+     background:radial-gradient(ellipse at center, #0f172a 0%, #020617 75%);border:1px solid #1e293b;">
+  <div id="canvas-holder" style="width:100%;height:100%;"></div>
   <div class="hud-corner hud-tl"></div>
   <div class="hud-corner hud-tr"></div>
   <div class="hud-corner hud-bl"></div>
@@ -278,6 +241,21 @@ PIPELINE_HTML_TEMPLATE = """
     <div class="node-label" data-idx="3">04 · CRITIQUE</div>
   </div>
 </div>
+<style>
+  .node-label {
+    color:#475569; font-size:12px; letter-spacing:1px; font-weight:600;
+    width:23%; text-align:center; transition:all .4s ease;
+  }
+  .node-label.active { color:#fbbf24; text-shadow:0 0 12px rgba(251,191,36,0.8); }
+  .node-label.done   { color:#4ade80; text-shadow:0 0 10px rgba(74,222,128,0.7); }
+  .node-label.error  { color:#f87171; text-shadow:0 0 10px rgba(248,113,113,0.7); }
+
+  .hud-corner { position:absolute; width:16px; height:16px; border-color:#38bdf8; opacity:0.55; }
+  .hud-tl { top:10px; left:10px; border-top:2px solid; border-left:2px solid; }
+  .hud-tr { top:10px; right:10px; border-top:2px solid; border-right:2px solid; }
+  .hud-bl { bottom:10px; left:10px; border-bottom:2px solid; border-left:2px solid; }
+  .hud-br { bottom:10px; right:10px; border-bottom:2px solid; border-right:2px solid; }
+</style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
 (function () {
@@ -438,30 +416,12 @@ PIPELINE_HTML_TEMPLATE = """
     if (s !== 'pending') el.classList.add(s);
   });
 
-  function syncSize() {
+  window.addEventListener('resize', function () {
     var w2 = holder.clientWidth, h2 = holder.clientHeight;
-    if (w2 === 0 || h2 === 0) return;
     camera.aspect = w2 / h2;
     camera.updateProjectionMatrix();
     renderer.setSize(w2, h2);
-  }
-
-  window.addEventListener('resize', syncSize);
-
-  // Streamlit Cloud sizes the component's iframe asynchronously (after this
-  // script has already run), so the very first clientWidth read above can
-  // be captured before the iframe reaches its final, real width — locking
-  // the canvas at a too-small size that a plain window "resize" event never
-  // corrects. ResizeObserver watches the holder itself and re-syncs whenever
-  // its actual box size changes, catching that race (and any later ones,
-  // e.g. sidebar collapse/expand).
-  if (window.ResizeObserver) {
-    var ro = new ResizeObserver(function () { syncSize(); });
-    ro.observe(holder);
-  } else {
-    // Fallback for older browsers without ResizeObserver support.
-    setTimeout(syncSize, 300);
-  }
+  });
 })();
 </script>
 """
@@ -469,7 +429,7 @@ PIPELINE_HTML_TEMPLATE = """
 
 def render_pipeline_visual(status: dict):
     html = PIPELINE_HTML_TEMPLATE.replace("__STATUS_JSON__", json.dumps(status))
-    components.html(html, height=620, scrolling=False)
+    components.html(html, height=460, scrolling=False)
 
 
 COPY_BUTTON_TEMPLATE = """

@@ -238,7 +238,7 @@ PIPELINE_HTML_TEMPLATE = """
   #viz-wrap {
     position: relative;
     width: 100%;
-    height: 400px;
+    height: 500px;
     border-radius: 14px;
     overflow: hidden;
     background: radial-gradient(ellipse at center, #0f172a 0%, #020617 75%);
@@ -246,8 +246,8 @@ PIPELINE_HTML_TEMPLATE = """
     box-sizing: border-box;
   }
   #canvas-holder {
-    width: 100%;
-    height: 100%;
+    width: 600px;
+    height: 600px;
   }
   .node-label {
     color:#475569; font-size:12px; letter-spacing:1px; font-weight:600;

@@ -230,8 +230,8 @@ PIPELINE_HTML_TEMPLATE = """
   html, body {
     margin: 0;
     padding: 0;
-    width: 100%;
-    height: 100%;
+    width: 900px;
+    height: 500px;
     overflow: hidden;
     background: transparent;
   }

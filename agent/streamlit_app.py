@@ -1,647 +1,302 @@
 """
-streamlit_app.py
------------------
-Drop this file next to pipeline.py and agents.py, then run:
+3D Agent Rack — Streamlit UI for the multi-agent research pipeline
+====================================================================
+Drives the SAME functions your pipeline.py uses (build_search_agents,
+build_reader_agents, writer_chain, critic_chain) but renders each stage
+as a tilted 3D console panel that "flattens" toward you and lights up
+as soon as that agent's result lands — like a rack of server blades
+ejecting one by one as the pipeline runs.
 
-    streamlit run streamlit_app.py
-
-It re-implements the same four stages as pipeline.run_research_pipeline()
-(search -> read -> write -> critique) using the exact same agent builders
-and chains from agents.py, and drives a live 3D telemetry panel (Three.js +
-a custom GLSL glow shader, HTML/CSS console theme, orchestrated from
-Streamlit) that lights up as each stage runs.
-
-Extras added on top of the base pipeline:
-  - per-stage timing + a duration bar chart
-  - "Retry from failed stage" so a flaky API call doesn't cost you the
-    whole run
-  - a session log in the sidebar so you can flip back through past runs
-    without re-invoking the agents
-  - word count / read-time + a one-click copy button on the report
+Run with:  streamlit run app.py
+(Keep this file in the same folder as agents.py / pipeline.py)
 """
 
-import json
-import time
-import traceback
-from datetime import datetime
+import html as _html
+import sys
+from pathlib import Path
 
 import streamlit as st
 import streamlit.components.v1 as components
 
-from agents import build_search_agents, build_reader_agents, writer_chain, critic_chain
+# Make sure the local project folder (where agents.py lives) is importable
+sys.path.append(str(Path(__file__).resolve().parent))
 
-STAGES = ["search", "reader", "writer", "critic"]
-STAGE_LABEL = {
-    "search": "STAGE 01 · SEARCH",
-    "reader": "STAGE 02 · READ",
-    "writer": "STAGE 03 · WRITE",
-    "critic": "STAGE 04 · CRITIQUE",
-}
-STAGE_SHORT = {"search": "Search", "reader": "Read", "writer": "Write", "critic": "Critique"}
-RESULT_KEY = {"search": "search_results", "reader": "scraped_content", "writer": "report", "critic": "feedback"}
-
-st.set_page_config(page_title="Research Pipeline Console", page_icon="🛰️", layout="wide")
-
-
-# --------------------------------------------------------------------------
-# Helpers
-# --------------------------------------------------------------------------
-def to_text(x) -> str:
-    """agents.py chains may return a string or a message-like object; normalize to text."""
-    if hasattr(x, "content"):
-        return x.content
-    return str(x)
-
-
-def init_state():
-    defaults = {
-        "status": {s: "pending" for s in STAGES},
-        "results": {},
-        "durations": {},
-        "run_topic": "",
-        "failed_stage": None,
-        "history": [],
-    }
-    for k, v in defaults.items():
-        if k not in st.session_state:
-            st.session_state[k] = v
-    # applied before the topic widget is instantiated below, so it's a safe mutation
-    if st.session_state.get("pending_topic") is not None:
-        st.session_state["topic_box"] = st.session_state.pop("pending_topic")
-
-
-def mark(stage: str, value: str):
-    st.session_state.status[stage] = value
-
-
-def reset_run_state():
-    st.session_state.status = {s: "pending" for s in STAGES}
-    st.session_state.results = {}
-    st.session_state.durations = {}
-    st.session_state.failed_stage = None
-
-
-def overall_status():
-    vals = st.session_state.status.values()
-    if any(v == "error" for v in vals):
-        return "ERROR", "#f87171"
-    if any(v == "active" for v in vals):
-        return "RUNNING", "#fbbf24"
-    if all(v == "done" for v in vals):
-        return "COMPLETE", "#4ade80"
-    return "IDLE", "#64748b"
-
-
-# --------------------------------------------------------------------------
-# Stage runners — same prompts/logic as pipeline.py, split out so a failed
-# stage can be retried without re-running the stages that already succeeded
-# --------------------------------------------------------------------------
-def run_search(topic):
-    agent = build_search_agents()
-    result = agent.invoke(
-        {"messages": [("user", f"Find recent, reliable and detailed information about:{topic}")]}
+try:
+    from agents import build_search_agents, build_reader_agents, writer_chain, critic_chain
+except ImportError as e:
+    st.set_page_config(page_title="Research Pipeline // Agent Rack", layout="wide")
+    st.error(
+        "Couldn't import `agents.py`. Put this file (app.py) in the same "
+        f"folder as your pipeline's `agents.py`.\n\nDetails: {e}"
     )
-    return result["messages"][-1].content
+    st.stop()
 
+st.set_page_config(page_title="Research Pipeline // Agent Rack", page_icon="🧩", layout="wide")
 
-def run_reader(topic, search_results):
-    agent = build_reader_agents()
-    result = agent.invoke(
-        {
-            "messages": [
-                (
-                    "user",
-                    f"Based on the following search results about '{topic}', "
-                    f"pick the most relevant URL and scrape it for deeper content.\n\n"
-                    f"Search Results:\n{search_results[:800]}",
-                )
-            ]
-        }
-    )
-    return result["messages"][-1].content
-
-
-def run_writer(topic, search_results, scraped_content):
-    combined = (
-        f"Search Results : \n{search_results}\n\n"
-        f"Detailed Scraped Content : \n{scraped_content}"
-    )
-    report = writer_chain.invoke({"topic": topic, "research": combined})
-    return to_text(report)
-
-
-def run_critic(report):
-    feedback = critic_chain.invoke({"report": report})
-    return to_text(feedback)
-
-
-def run_stage(stage, topic):
-    res = st.session_state.results
-    if stage == "search":
-        return run_search(topic)
-    if stage == "reader":
-        return run_reader(topic, res["search_results"])
-    if stage == "writer":
-        return run_writer(topic, res["search_results"], res["scraped_content"])
-    if stage == "critic":
-        return run_critic(res["report"])
-    raise ValueError(f"Unknown stage: {stage}")
-
-
-# --------------------------------------------------------------------------
-# Global console theme
-# --------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
+# Global styling — dark console / server-rack aesthetic with CSS 3D transforms
+# ----------------------------------------------------------------------------
 st.markdown(
     """
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
 
-    html, body, [class*="css"] { font-family: 'JetBrains Mono', monospace; }
+    html, body, [class*="css"] { font-family: 'IBM Plex Sans', sans-serif; }
 
     .stApp {
-        background: radial-gradient(ellipse at top, #0b1120 0%, #060910 60%, #030509 100%);
-        color: #cbd5e1;
-    }
-    .stApp::before {
-        content: "";
-        position: fixed; inset: 0; pointer-events: none; z-index: 0;
-        background: repeating-linear-gradient(
-            180deg, rgba(255,255,255,0.015) 0px, rgba(255,255,255,0.015) 1px,
-            transparent 1px, transparent 3px
-        );
+        background: radial-gradient(ellipse at top, #0B0F1A 0%, #05070B 62%);
+        color: #E7ECF3;
     }
 
-    h1, h2, h3 { font-family: 'Space Grotesk', sans-serif !important; letter-spacing: 0.3px; }
+    .hero-title { font-family:'Space Mono',monospace; font-size:1.8rem; font-weight:700;
+        color:#E7ECF3; letter-spacing:2px; margin: 0.4rem 0 0.1rem; }
+    .hero-sub { color:#6B7688; font-size:.8rem; letter-spacing:3px; text-transform:uppercase; }
 
-    .console-eyebrow {
-        font-family: 'JetBrains Mono', monospace; font-size: 12px; letter-spacing: 3px;
-        color: #38bdf8; text-transform: uppercase; margin-bottom: -6px;
+    .console-label { color:#6B7688; font-size:.72rem; letter-spacing:3px;
+        font-family:'Space Mono',monospace; margin: 1.6rem 0 .4rem; }
+
+    div[data-testid="stTextInput"] input {
+        background:#0A0D16; border:1px solid rgba(255,255,255,.1); color:#E7ECF3;
+        font-family:'JetBrains Mono',monospace; border-radius:4px; padding:.7rem .9rem;
     }
-    .status-badge {
-        display:inline-block; font-family:'JetBrains Mono',monospace; font-size:12px;
-        letter-spacing:2px; padding:4px 12px; border-radius:999px; margin-left:12px;
-        vertical-align:middle; border:1px solid currentColor;
+    div[data-testid="stTextInput"] input:focus { border-color:#4FD1FF; box-shadow:0 0 0 1px #4FD1FF44; }
+
+    .stButton>button {
+        background: linear-gradient(160deg,#12321f,#0A0D16); border:1px solid #39FF8855;
+        color:#39FF88; font-family:'Space Mono',monospace; letter-spacing:2px; font-weight:700;
+        border-radius:4px; padding:.65rem 1rem; transition: all .25s; width:100%;
+    }
+    .stButton>button:hover { box-shadow:0 0 20px #39FF8855; border-color:#39FF88; color:#c9ffe0; }
+
+    .stage-panel {
+        background: linear-gradient(135deg, #0D1220, #0A0D16);
+        border: 1px solid rgba(255,255,255,.08);
+        border-left: 3px solid var(--accent);
+        border-radius: 6px;
+        padding: 1.2rem 1.4rem;
+        margin-bottom: 1rem;
+        transform-style: preserve-3d;
+        transform: perspective(1000px) rotateY(-2.5deg) rotateX(0.8deg);
+        transition: transform .4s cubic-bezier(.2,.8,.2,1), box-shadow .4s, opacity .4s;
+        box-shadow: 8px 14px 30px rgba(0,0,0,.55);
+    }
+    .stage-panel:hover {
+        transform: perspective(1000px) rotateY(0deg) rotateX(0deg) translateZ(6px);
+        box-shadow: 0 16px 36px rgba(0,0,0,.6), 0 0 26px var(--glow);
+    }
+    .stage-panel.pending { opacity:.42; filter:grayscale(.5); }
+    .stage-panel.active { animation: pulseGlow 1.5s ease-in-out infinite; }
+    @keyframes pulseGlow {
+        0%,100% { box-shadow:8px 14px 30px rgba(0,0,0,.55); }
+        50% { box-shadow:0 0 30px var(--glow); }
+    }
+    .stage-panel.done { animation: flatten .55s ease-out; }
+    @keyframes flatten {
+        from { transform:perspective(1000px) rotateY(-14deg) translateZ(-30px); opacity:0; }
+        to { transform:perspective(1000px) rotateY(-2.5deg); opacity:1; }
     }
 
-    .chip-row { display:flex; gap:10px; flex-wrap:wrap; margin: 6px 0 18px 0; }
-    .chip {
-        background:#0f172a; border:1px solid #1e293b; border-radius:999px;
-        padding:5px 14px; font-size:12px; color:#94a3b8; font-family:'JetBrains Mono',monospace;
-        letter-spacing:0.5px;
-    }
-    .chip b { color:#e2e8f0; }
+    .panel-head { display:flex; align-items:center; gap:.6rem; margin-bottom:.55rem; }
+    .panel-num { color:var(--accent); font-family:'Space Mono',monospace; font-size:.8rem; opacity:.85; }
+    .panel-name { font-family:'Space Mono',monospace; font-size:.92rem; font-weight:700;
+        letter-spacing:2px; color:#E7ECF3; flex:1; }
+    .panel-led { width:8px; height:8px; border-radius:50%; background:#333; flex-shrink:0; }
+    .panel-led.active { background:var(--accent); box-shadow:0 0 10px var(--accent); animation:blink 1.2s infinite; }
+    .panel-led.done { background:var(--accent); box-shadow:0 0 8px var(--accent); }
+    @keyframes blink { 0%,100% { opacity:1; } 50% { opacity:.3; } }
 
-    .stTextInput > div > div > input {
-        background: #0f172a; color: #e2e8f0; border: 1px solid #1e293b;
-        font-family: 'JetBrains Mono', monospace;
-    }
+    .panel-desc { color:#8791A3; font-size:.85rem; }
+    .panel-status { margin-top:.45rem; font-family:'JetBrains Mono',monospace; font-size:.74rem;
+        color:#6B7688; letter-spacing:1px; }
+    .panel-status.blink { animation: blink 1.2s infinite; color:var(--accent); }
 
-    .stButton > button {
-        background: transparent; color: #fbbf24; border: 1px solid #fbbf24;
-        font-family: 'JetBrains Mono', monospace; text-transform: uppercase;
-        letter-spacing: 1px; border-radius: 4px; padding: 0.5rem 1.4rem; font-weight: 600;
+    .panel-readout {
+        font-family:'JetBrains Mono',monospace; font-size:.8rem; line-height:1.55; color:#C9D2E0;
+        max-height: 320px; overflow-y:auto; white-space:pre-wrap;
+        background:#080A10; border:1px solid rgba(255,255,255,.06); border-radius:4px; padding:.75rem .9rem;
     }
-    .stButton > button:hover { background: #fbbf24; color: #0b1120; border-color: #fbbf24; }
-    .stButton > button:disabled { color: #475569; border-color: #1e293b; }
-
-    .streamlit-expanderHeader {
-        font-family: 'JetBrains Mono', monospace !important; letter-spacing: 0.5px;
-        background: #0f172a !important; border: 1px solid #1e293b !important; border-radius: 4px !important;
-    }
-
-    .status-line { font-family: 'JetBrains Mono', monospace; font-size: 13px; color: #94a3b8; letter-spacing: 0.5px; }
-
-    section[data-testid="stSidebar"] { background: #060910; border-right: 1px solid #1e293b; }
-    section[data-testid="stSidebar"] .stButton > button {
-        width: 100%; padding: 0.3rem 0.8rem; font-size: 11px;
-    }
+    .panel-readout::-webkit-scrollbar { width:6px; }
+    .panel-readout::-webkit-scrollbar-thumb { background:#2A3040; border-radius:3px; }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-
-# --------------------------------------------------------------------------
-# 3D telemetry panel (Three.js scene + GLSL glow shader + flowing data
-# particles along completed links, framed with HUD corner brackets)
-# --------------------------------------------------------------------------
-PIPELINE_HTML_TEMPLATE = """
-<div id="viz-wrap" style="position:relative;width:100%;height:440px;border-radius:14px;overflow:hidden;
-     background:radial-gradient(ellipse at center, #0f172a 0%, #020617 75%);border:1px solid #1e293b;">
-  <div id="canvas-holder" style="width:100%;height:100%;"></div>
-  <div class="hud-corner hud-tl"></div>
-  <div class="hud-corner hud-tr"></div>
-  <div class="hud-corner hud-bl"></div>
-  <div class="hud-corner hud-br"></div>
-  <div id="labels" style="position:absolute;bottom:16px;left:0;right:0;display:flex;justify-content:space-around;
-       pointer-events:none;font-family:'JetBrains Mono',monospace;">
-    <div class="node-label" data-idx="0">01 · SEARCH</div>
-    <div class="node-label" data-idx="1">02 · READ</div>
-    <div class="node-label" data-idx="2">03 · WRITE</div>
-    <div class="node-label" data-idx="3">04 · CRITIQUE</div>
-  </div>
-</div>
-<style>
-  .node-label {
-    color:#475569; font-size:12px; letter-spacing:1px; font-weight:600;
-    width:23%; text-align:center; transition:all .4s ease;
-  }
-  .node-label.active { color:#fbbf24; text-shadow:0 0 12px rgba(251,191,36,0.8); }
-  .node-label.done   { color:#4ade80; text-shadow:0 0 10px rgba(74,222,128,0.7); }
-  .node-label.error  { color:#f87171; text-shadow:0 0 10px rgba(248,113,113,0.7); }
-
-  .hud-corner { position:absolute; width:16px; height:16px; border-color:#38bdf8; opacity:0.55; }
-  .hud-tl { top:10px; left:10px; border-top:2px solid; border-left:2px solid; }
-  .hud-tr { top:10px; right:10px; border-top:2px solid; border-right:2px solid; }
-  .hud-bl { bottom:10px; left:10px; border-bottom:2px solid; border-left:2px solid; }
-  .hud-br { bottom:10px; right:10px; border-bottom:2px solid; border-right:2px solid; }
-</style>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script>
-(function () {
-  var STATUS = __STATUS_JSON__;
-  var order = ["search", "reader", "writer", "critic"];
-
-  var holder = document.getElementById('canvas-holder');
-  var w = holder.clientWidth, h = holder.clientHeight;
-
-  var scene = new THREE.Scene();
-  var camera = new THREE.PerspectiveCamera(50, w / h, 0.1, 1000);
-  camera.position.set(0, 2.1, 13);
-  camera.lookAt(0, 0, 0);
-
-  var renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-  renderer.setSize(w, h);
-  renderer.setPixelRatio(window.devicePixelRatio || 1);
-  holder.appendChild(renderer.domElement);
-
-  scene.add(new THREE.AmbientLight(0x8899ff, 0.55));
-  var key = new THREE.PointLight(0x38bdf8, 1.3, 50);
-  key.position.set(0, 6, 8);
-  scene.add(key);
-
-  var starGeo = new THREE.BufferGeometry();
-  var starCount = 350;
-  var positions = new Float32Array(starCount * 3);
-  for (var i = 0; i < starCount; i++) {
-    positions[i * 3]     = (Math.random() - 0.5) * 60;
-    positions[i * 3 + 1] = (Math.random() - 0.5) * 30;
-    positions[i * 3 + 2] = (Math.random() - 0.5) * 60 - 10;
-  }
-  starGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  var starMat = new THREE.PointsMaterial({ color: 0x334155, size: 0.06 });
-  scene.add(new THREE.Points(starGeo, starMat));
-
-  var group = new THREE.Group();
-  scene.add(group);
-
-  var colors = { pending: 0x334155, active: 0xfbbf24, done: 0x4ade80, error: 0xf87171 };
-
-  function glowMaterial(hexColor) {
-    return new THREE.ShaderMaterial({
-      uniforms: { c: { value: new THREE.Color(hexColor) }, pulse: { value: 0 } },
-      vertexShader: [
-        'varying vec3 vNormal;',
-        'void main() {',
-        '  vNormal = normalize(normalMatrix * normal);',
-        '  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);',
-        '}'
-      ].join('\\n'),
-      fragmentShader: [
-        'uniform vec3 c;',
-        'uniform float pulse;',
-        'varying vec3 vNormal;',
-        'void main() {',
-        '  float intensity = pow(0.65 - dot(vNormal, vec3(0.0, 0.0, 1.0)), 2.0);',
-        '  vec3 glow = c * intensity * (1.0 + pulse * 1.6);',
-        '  gl_FragColor = vec4(glow, intensity);',
-        '}'
-      ].join('\\n'),
-      transparent: true,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      side: THREE.BackSide
-    });
-  }
-
-  var xs = [-6, -2, 2, 6];
-  var nodes = [];
-  var flowParticles = [];
-
-  for (var idx = 0; idx < 4; idx++) {
-    var st = STATUS[order[idx]] || 'pending';
-    var col = colors[st];
-    var zpos = -Math.pow(xs[idx], 2) * 0.05;
-
-    var coreGeo = new THREE.IcosahedronGeometry(0.9, 1);
-    var coreMat = new THREE.MeshPhongMaterial({
-      color: col, emissive: col, emissiveIntensity: st === 'active' ? 0.9 : 0.35,
-      shininess: 80, flatShading: true
-    });
-    var core = new THREE.Mesh(coreGeo, coreMat);
-    core.position.set(xs[idx], 0, zpos);
-    group.add(core);
-
-    var glowGeo = new THREE.IcosahedronGeometry(1.35, 2);
-    var glowMat = glowMaterial(col);
-    var glow = new THREE.Mesh(glowGeo, glowMat);
-    glow.position.copy(core.position);
-    group.add(glow);
-
-    nodes.push({ core: core, mat: coreMat, glowMat: glowMat, status: st });
-
-    if (idx > 0) {
-      var prevX = xs[idx - 1], curX = xs[idx];
-      var prevZ = -Math.pow(prevX, 2) * 0.05, curZ = -Math.pow(curX, 2) * 0.05;
-      var midX = (prevX + curX) / 2, midY = -0.18, midZ = -Math.pow(midX, 2) * 0.05;
-      var curve = new THREE.QuadraticBezierCurve3(
-        new THREE.Vector3(prevX, 0, prevZ),
-        new THREE.Vector3(midX, midY, midZ),
-        new THREE.Vector3(curX, 0, curZ)
-      );
-      var tubeGeo = new THREE.TubeGeometry(curve, 20, 0.045, 8, false);
-      var linkDone = STATUS[order[idx - 1]] === 'done';
-      var tubeMat = new THREE.MeshBasicMaterial({
-        color: linkDone ? colors.done : colors.pending, transparent: true, opacity: 0.55
-      });
-      group.add(new THREE.Mesh(tubeGeo, tubeMat));
-
-      if (linkDone) {
-        var particleGeo = new THREE.SphereGeometry(0.09, 8, 8);
-        var particleMat = new THREE.MeshBasicMaterial({ color: 0x4ade80 });
-        var particle = new THREE.Mesh(particleGeo, particleMat);
-        group.add(particle);
-        flowParticles.push({ mesh: particle, curve: curve, t: Math.random() });
-      }
-    }
-  }
-
-  var t = 0;
-  function animate() {
-    t += 0.02;
-    group.rotation.y = Math.sin(t * 0.15) * 0.18;
-    group.rotation.x = Math.sin(t * 0.1) * 0.05;
-
-    for (var n = 0; n < nodes.length; n++) {
-      var node = nodes[n];
-      if (node.status === 'active') {
-        var pulse = (Math.sin(t * 4) + 1) / 2;
-        var scale = 1 + pulse * 0.12;
-        node.core.scale.set(scale, scale, scale);
-        node.mat.emissiveIntensity = 0.6 + pulse * 0.8;
-        node.glowMat.uniforms.pulse.value = pulse;
-      } else {
-        node.core.rotation.y += 0.004;
-      }
-    }
-
-    for (var p = 0; p < flowParticles.length; p++) {
-      var fp = flowParticles[p];
-      fp.t += 0.006;
-      if (fp.t > 1) fp.t = 0;
-      var pos = fp.curve.getPointAt(fp.t);
-      fp.mesh.position.copy(pos);
-    }
-
-    renderer.render(scene, camera);
-    requestAnimationFrame(animate);
-  }
-  animate();
-
-  var labels = document.querySelectorAll('.node-label');
-  labels.forEach(function (el) {
-    var i = parseInt(el.getAttribute('data-idx'), 10);
-    var s = STATUS[order[i]] || 'pending';
-    el.classList.remove('active', 'done', 'error');
-    if (s !== 'pending') el.classList.add(s);
-  });
-
-  window.addEventListener('resize', function () {
-    var w2 = holder.clientWidth, h2 = holder.clientHeight;
-    camera.aspect = w2 / h2;
-    camera.updateProjectionMatrix();
-    renderer.setSize(w2, h2);
-  });
-})();
-</script>
-"""
-
-
-def render_pipeline_visual(status: dict):
-    html = PIPELINE_HTML_TEMPLATE.replace("__STATUS_JSON__", json.dumps(status))
-    components.html(html, height=460, scrolling=False)
-
-
-COPY_BUTTON_TEMPLATE = """
-<button id="copy-btn-__KEY__" class="copy-btn">__LABEL__</button>
-<script>
-(function(){
-  var btn = document.getElementById('copy-btn-__KEY__');
-  var txt = __TEXT_JSON__;
-  btn.addEventListener('click', function(){
-    navigator.clipboard.writeText(txt);
-    var original = btn.innerText;
-    btn.innerText = '✓ copied';
-    setTimeout(function(){ btn.innerText = original; }, 1400);
-  });
-})();
-</script>
-<style>
-.copy-btn {
-  background:transparent; color:#38bdf8; border:1px solid #1e293b;
-  font-family:'JetBrains Mono',monospace; text-transform:uppercase; letter-spacing:1px;
-  border-radius:4px; padding:0.5rem 1.4rem; font-size:12px; cursor:pointer; width:100%;
-}
-.copy-btn:hover { border-color:#38bdf8; }
-</style>
-"""
-
-
-def copy_button(text: str, key: str, label: str = "⧉ COPY REPORT"):
-    html = (
-        COPY_BUTTON_TEMPLATE.replace("__KEY__", key)
-        .replace("__LABEL__", label)
-        .replace("__TEXT_JSON__", json.dumps(text))
-    )
-    components.html(html, height=46)
-
-
-# --------------------------------------------------------------------------
-# Sidebar — session log of past runs (view-only, doesn't re-invoke agents)
-# --------------------------------------------------------------------------
-def render_sidebar():
-    with st.sidebar:
-        st.markdown("### 🛰️ SESSION LOG")
-        if not st.session_state.history:
-            st.caption("No runs yet this session.")
-        for i, rec in enumerate(reversed(st.session_state.history)):
-            badge = "🟢" if rec["status"] == "done" else "🔴"
-            st.markdown(f"**{badge} {rec['topic'][:36]}**")
-            st.caption(f"{rec['time']} · {rec['total']:.1f}s total")
-            if st.button("View", key=f"view-{i}"):
-                st.session_state.results = rec["results"]
-                st.session_state.status = rec["stage_status"]
-                st.session_state.durations = rec["durations"]
-                st.session_state.run_topic = rec["topic"]
-                st.session_state.pending_topic = rec["topic"]
-                st.session_state.failed_stage = None
-            st.divider()
-        if st.session_state.history:
-            if st.button("🗑 Clear session log"):
-                st.session_state.history = []
-
-
-def log_history():
-    st.session_state.history.append(
-        {
-            "topic": st.session_state.run_topic,
-            "time": datetime.now().strftime("%H:%M:%S"),
-            "status": "error" if st.session_state.failed_stage else "done",
-            "total": sum(st.session_state.durations.values()),
-            "results": dict(st.session_state.results),
-            "stage_status": dict(st.session_state.status),
-            "durations": dict(st.session_state.durations),
-        }
-    )
-    st.session_state.history = st.session_state.history[-8:]
-
-
-def update_last_history():
-    if st.session_state.history:
-        rec = st.session_state.history[-1]
-        rec["status"] = "error" if st.session_state.failed_stage else "done"
-        rec["results"] = dict(st.session_state.results)
-        rec["stage_status"] = dict(st.session_state.status)
-        rec["durations"] = dict(st.session_state.durations)
-        rec["total"] = sum(st.session_state.durations.values())
-
-
-# --------------------------------------------------------------------------
-# Page
-# --------------------------------------------------------------------------
-init_state()
-render_sidebar()
-
-status_label, status_color = overall_status()
-st.markdown('<div class="console-eyebrow">MULTI-AGENT RESEARCH · TELEMETRY CONSOLE</div>', unsafe_allow_html=True)
-st.markdown(
-    f'<h1 style="display:inline-block;margin-bottom:0;">Research Pipeline</h1>'
-    f'<span class="status-badge" style="color:{status_color};">● {status_label}</span>',
-    unsafe_allow_html=True,
-)
-st.caption("⚪ pending&nbsp;&nbsp;&nbsp;🟡 active&nbsp;&nbsp;&nbsp;🟢 done&nbsp;&nbsp;&nbsp;🔴 error", unsafe_allow_html=True)
-
-viz_slot = st.empty()
-with viz_slot.container():
-    render_pipeline_visual(st.session_state.status)
-
-total_time = sum(st.session_state.durations.values()) if st.session_state.durations else 0.0
-done_count = sum(1 for v in st.session_state.status.values() if v == "done")
-st.markdown(
-    f"""
-    <div class="chip-row">
-      <div class="chip">SESSION RUNS <b>{len(st.session_state.history)}</b></div>
-      <div class="chip">STAGES DONE <b>{done_count}/4</b></div>
-      <div class="chip">ELAPSED <b>{total_time:.1f}s</b></div>
+# ----------------------------------------------------------------------------
+# Hero: decorative interactive 3D rack (mouse-tilt), isolated in an iframe
+# ----------------------------------------------------------------------------
+components.html(
+    """
+    <div class="rack-wrap">
+      <div class="rack" id="rack">
+        <div class="blade" style="--c:#4FD1FF"><span class="dot"></span>SEARCH</div>
+        <div class="blade" style="--c:#B388FF"><span class="dot"></span>READER</div>
+        <div class="blade" style="--c:#39FF88"><span class="dot"></span>WRITER</div>
+        <div class="blade" style="--c:#FFB020"><span class="dot"></span>CRITIC</div>
+      </div>
+      <div class="scanline"></div>
     </div>
+    <style>
+      body { margin:0; background:transparent; }
+      .rack-wrap { perspective:1200px; padding:26px 10px 6px; position:relative; }
+      .rack { display:flex; gap:20px; justify-content:center; transform-style:preserve-3d;
+        transition: transform .15s ease-out; }
+      .blade {
+        width:150px; height:110px; background:linear-gradient(160deg,#0D1220,#080B12);
+        border:1px solid rgba(255,255,255,.08); border-top:3px solid var(--c); border-radius:4px;
+        display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px;
+        color:#9AA4B5; font-family:'Space Mono',monospace; font-size:11px; letter-spacing:2px;
+        box-shadow:0 20px 40px rgba(0,0,0,.6); animation: sway 6s ease-in-out infinite;
+      }
+      .blade:nth-child(2) { animation-delay:-1.5s; }
+      .blade:nth-child(3) { animation-delay:-3s; }
+      .blade:nth-child(4) { animation-delay:-4.5s; }
+      @keyframes sway {
+        0%,100% { transform: rotateY(-10deg) rotateX(3deg); }
+        50% { transform: rotateY(6deg) rotateX(-2deg); }
+      }
+      .dot { width:8px; height:8px; border-radius:50%; background:var(--c);
+        box-shadow:0 0 10px var(--c); animation:blink 1.8s infinite; }
+      @keyframes blink { 0%,100% { opacity:1; } 50% { opacity:.25; } }
+      .scanline { position:absolute; left:6%; right:6%; height:2px; top:20px;
+        background:linear-gradient(90deg,transparent,#4FD1FF,transparent); opacity:.5;
+        animation:scan 4s linear infinite; }
+      @keyframes scan { 0% { top:20px; } 100% { top:150px; } }
+    </style>
+    <script>
+      const rack = document.getElementById('rack');
+      document.addEventListener('mousemove', (e) => {
+        const x = (e.clientX / window.innerWidth - 0.5) * 16;
+        const y = (e.clientY / window.innerHeight - 0.5) * -10;
+        rack.style.transform = `rotateY(${x}deg) rotateX(${y}deg)`;
+      });
+    </script>
     """,
-    unsafe_allow_html=True,
+    height=190,
 )
 
-col1, col2, col3 = st.columns([4, 1, 1])
+st.markdown('<div class="hero-title">RESEARCH PIPELINE // AGENT RACK</div>', unsafe_allow_html=True)
+st.markdown('<div class="hero-sub">4-stage multi-agent research system</div>', unsafe_allow_html=True)
+
+# ----------------------------------------------------------------------------
+# Console input
+# ----------------------------------------------------------------------------
+st.markdown('<div class="console-label">TOPIC</div>', unsafe_allow_html=True)
+col1, col2 = st.columns([5, 1])
 with col1:
-    topic_input = st.text_input("Research topic", key="topic_box", placeholder="e.g. quantum error correction breakthroughs 2026")
+    topic = st.text_input(
+        "topic", placeholder="e.g. advances in solid-state batteries 2026",
+        label_visibility="collapsed",
+    )
 with col2:
-    st.write("")
-    st.write("")
-    run_clicked = st.button("▶ Run")
-with col3:
-    st.write("")
-    st.write("")
-    retry_clicked = st.button("↻ Retry", disabled=st.session_state.failed_stage is None)
+    run_clicked = st.button("RUN ▶")
 
-status_text = st.empty()
-
-
-def execute_from(start_index: int, topic: str) -> bool:
-    for stage in STAGES[start_index:]:
-        mark(stage, "active")
-        with viz_slot.container():
-            render_pipeline_visual(st.session_state.status)
-        status_text.markdown(f'<span class="status-line">RUNNING · {STAGE_LABEL[stage]}…</span>', unsafe_allow_html=True)
-
-        t0 = time.time()
-        try:
-            output = run_stage(stage, topic)
-        except Exception as e:
-            st.session_state.durations[stage] = time.time() - t0
-            mark(stage, "error")
-            st.session_state.failed_stage = stage
-            with viz_slot.container():
-                render_pipeline_visual(st.session_state.status)
-            status_text.markdown(
-                f'<span class="status-line">ERROR · {STAGE_LABEL[stage]} failed — {e}</span>', unsafe_allow_html=True
-            )
-            st.error(f"Pipeline failed at stage: {stage}")
-            st.code(traceback.format_exc())
-            return False
-
-        st.session_state.results[RESULT_KEY[stage]] = output
-        st.session_state.durations[stage] = time.time() - t0
-        mark(stage, "done")
-        with viz_slot.container():
-            render_pipeline_visual(st.session_state.status)
-
-    status_text.markdown('<span class="status-line">COMPLETE · report ready below.</span>', unsafe_allow_html=True)
-    return True
+STAGES = [
+    {"key": "search", "num": "01", "name": "SEARCH AGENT", "accent": "#4FD1FF",
+     "desc": "Scanning for recent, reliable sources."},
+    {"key": "reader", "num": "02", "name": "READER AGENT", "accent": "#B388FF",
+     "desc": "Scraping the top result for deeper content."},
+    {"key": "writer", "num": "03", "name": "WRITER CHAIN", "accent": "#39FF88",
+     "desc": "Synthesizing the research into a report."},
+    {"key": "critic", "num": "04", "name": "CRITIC CHAIN", "accent": "#FFB020",
+     "desc": "Reviewing the report for gaps and rigor."},
+]
 
 
-if run_clicked:
-    if not topic_input or not topic_input.strip():
-        st.warning("Enter a topic first.")
+def esc(x) -> str:
+    return _html.escape(str(x))
+
+
+def as_text(x) -> str:
+    """Normalize LangChain outputs (str, or objects with .content) to plain text."""
+    return getattr(x, "content", x)
+
+
+def render_panel(placeholder, stage: dict, state: str, content=None) -> None:
+    accent = stage["accent"]
+    if state == "pending":
+        body = (
+            f'<div class="panel-desc">{esc(stage["desc"])}</div>'
+            f'<div class="panel-status">STANDBY</div>'
+        )
+    elif state == "active":
+        body = (
+            f'<div class="panel-desc">{esc(stage["desc"])}</div>'
+            f'<div class="panel-status blink">● PROCESSING…</div>'
+        )
     else:
-        reset_run_state()
-        st.session_state.run_topic = topic_input.strip()
-        with viz_slot.container():
-            render_pipeline_visual(st.session_state.status)
-        execute_from(0, st.session_state.run_topic)
-        log_history()
-elif retry_clicked and st.session_state.failed_stage:
-    start_idx = STAGES.index(st.session_state.failed_stage)
-    st.session_state.failed_stage = None
-    execute_from(start_idx, st.session_state.run_topic)
-    update_last_history()
+        body = f'<div class="panel-readout">{esc(as_text(content))}</div>'
 
-# --------------------------------------------------------------------------
-# Persisted results (survive reruns triggered by other widgets, e.g. downloads)
-# --------------------------------------------------------------------------
-results = st.session_state.results
+    placeholder.markdown(
+        f"""
+        <div class="stage-panel {state}" style="--accent:{accent}; --glow:{accent}66;">
+          <div class="panel-head">
+            <span class="panel-num">{stage['num']}</span>
+            <span class="panel-name">{stage['name']}</span>
+            <span class="panel-led {state}"></span>
+          </div>
+          {body}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-if results.get("search_results"):
-    with st.expander(f"{STAGE_LABEL['search']} — raw findings"):
-        st.write(results["search_results"])
 
-if results.get("scraped_content"):
-    with st.expander(f"{STAGE_LABEL['reader']} — scraped detail"):
-        st.write(results["scraped_content"])
+st.markdown('<div class="console-label">PIPELINE</div>', unsafe_allow_html=True)
 
-if results.get("report"):
-    st.markdown(f"### {STAGE_LABEL['writer']}")
-    wc = len(results["report"].split())
-    read_min = max(1, round(wc / 200))
-    st.caption(f"{wc} words · ~{read_min} min read")
-    st.markdown(results["report"])
-    dl_col, copy_col = st.columns([1, 1])
-    with dl_col:
-        st.download_button("⬇ Download .md", results["report"], file_name="research_report.md", mime="text/markdown")
-    with copy_col:
-        copy_button(results["report"], key="report")
+placeholders = {}
+for stage in STAGES:
+    placeholders[stage["key"]] = st.empty()
+    render_panel(placeholders[stage["key"]], stage, "pending")
 
-if results.get("feedback"):
-    with st.expander(f"{STAGE_LABEL['critic']} — review notes", expanded=True):
-        st.write(results["feedback"])
+# ----------------------------------------------------------------------------
+# Run the pipeline (same logic as pipeline.py), updating panels live
+# ----------------------------------------------------------------------------
+if run_clicked:
+    if not topic.strip():
+        st.warning("Enter a topic before running the pipeline.")
+    else:
+        state: dict = {}
 
-if st.session_state.durations:
-    st.markdown("#### Stage timing")
-    chart_data = {STAGE_SHORT[s]: round(st.session_state.durations[s], 2) for s in STAGES if s in st.session_state.durations}
-    st.bar_chart(chart_data)
+        # 01 — Search agent
+        render_panel(placeholders["search"], STAGES[0], "active")
+        search_agent = build_search_agents()
+        search_result = search_agent.invoke(
+            {"messages": [("user", f"Find recent, reliable and detailed information about:{topic}")]}
+        )
+        state["search_results"] = search_result["messages"][-1].content
+        render_panel(placeholders["search"], STAGES[0], "done", state["search_results"])
+
+        # 02 — Reader agent
+        render_panel(placeholders["reader"], STAGES[1], "active")
+        reader_agent = build_reader_agents()
+        reader_result = reader_agent.invoke(
+            {
+                "messages": [
+                    (
+                        "user",
+                        f"Based on the following search results about '{topic}', "
+                        f"pick the most relevant URL and scrape it for deeper content.\n\n"
+                        f"Search Results:\n{state['search_results'][:800]}",
+                    )
+                ]
+            }
+        )
+        state["scraped_content"] = reader_result["messages"][-1].content
+        render_panel(placeholders["reader"], STAGES[1], "done", state["scraped_content"])
+
+        # 03 — Writer chain
+        render_panel(placeholders["writer"], STAGES[2], "active")
+        research_combined = (
+            f"Search Results : \n{state['search_results']}\n\n"
+            f"Detailed Scraped Content : \n{state['scraped_content']}"
+        )
+        state["report"] = writer_chain.invoke({"topic": topic, "research": research_combined})
+        render_panel(placeholders["writer"], STAGES[2], "done", state["report"])
+
+        # 04 — Critic chain
+        render_panel(placeholders["critic"], STAGES[3], "active")
+        state["feedback"] = critic_chain.invoke({"report": state["report"]})
+        render_panel(placeholders["critic"], STAGES[3], "done", state["feedback"])
+
+        st.success("Pipeline complete — all 4 agents reported in.")
